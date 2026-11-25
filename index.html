@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Code Days</title>
+<style>
+  :root { --ink:#141414; --muted:#8a8a8a; --rule:#d9d9d9; --empty:#e3e3e3; --dot:#9db8bf; --dot-strong:#6f9aa5; --bg:#fff; }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink:#eee; --muted:#888; --rule:#333; --empty:#2a2a2a; --dot:#6f9aa5; --dot-strong:#9dc6d0; --bg:#121212; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font-family: ui-sans-serif, -apple-system, "Helvetica Neue", sans-serif; }
+  main { max-width: 1560px; margin: 0 auto; padding: 48px clamp(16px,4vw,60px) 80px; }
+  hr { border:0; border-top:2px solid var(--rule); margin:0 0 28px; }
+  .head { display:flex; align-items:flex-end; justify-content:space-between; gap:24px; flex-wrap:wrap; }
+  h1 { font-size:46px; font-weight:500; letter-spacing:-0.02em; margin:0; }
+  .controls { display:flex; gap:8px; flex-wrap:wrap; }
+  .seg { display:flex; border:1px solid var(--rule); border-radius:999px; overflow:hidden; }
+  .seg button { background:none; border:0; color:var(--muted); font:inherit; font-size:13px; padding:6px 14px; cursor:pointer; }
+  .seg button.on { background:var(--ink); color:var(--bg); }
+  .refresh { background:none; border:1px solid var(--rule); border-radius:999px; color:var(--ink); font:inherit; font-size:13px; padding:6px 14px; cursor:pointer; }
+  .refresh:disabled { opacity:.5; cursor:wait; }
+  .stats { display:flex; gap:48px; margin:28px 0 36px; flex-wrap:wrap; }
+  .stat b { display:block; font-size:34px; font-weight:500; font-variant-numeric:tabular-nums; }
+  .stat span { color:var(--muted); font-size:13px; }
+  .grid-wrap { padding-bottom:8px; }
+  #grid { width:100%; height:auto; display:block; }
+  svg text { fill:var(--ink); font-size:20px; }
+  svg .day { cursor:pointer; }
+  svg .day:hover { stroke:var(--ink); stroke-width:1.5; }
+  .foot { color:var(--muted); font-size:12px; margin-top:20px; display:flex; justify-content:space-between; gap:16px; flex-wrap:wrap; }
+  .legend { display:flex; align-items:center; gap:6px; }
+  #tip { position:fixed; pointer-events:none; background:var(--ink); color:var(--bg); font-size:12px; line-height:1.45; padding:8px 10px; border-radius:6px; opacity:0; transition:opacity .08s; max-width:300px; z-index:9; }
+  #tip b { font-weight:600; }
+</style>
+</head>
+<body>
+<main>
+  <hr>
+  <div class="head">
+    <h1>Code activity</h1>
+    <div class="controls">
+      <div class="seg" id="source">
+        <button data-v="all" class="on">All</button>
+        <button data-v="commits">Git commits</button>
+      </div>
+      <div class="seg" id="range"></div>
+    </div>
+  </div>
+  <div class="stats" id="stats"></div>
+  <div class="grid-wrap"><svg id="grid"></svg></div>
+  <div class="foot">
+    <span id="gen"></span>
+    <span class="legend">Less <svg width="96" height="18" id="legend"></svg> More</span>
+  </div>
+</main>
+<div id="tip"></div>
+<script>
+const $ = s => document.querySelector(s);
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const DOW = ["S","M","T","W","T","F","S"];
+let DATA = null, source = "all", range = "last";
+
+const iso = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate()+n); return x; };
+const today = () => { const t = new Date(); t.setHours(0,0,0,0); return t; };
+
+function count(rec) {
+  if (!rec) return 0;
+  return source === "all" ? rec.commits + rec.edits : rec[source];
+}
+
+function bounds() {
+  const t = today();
+  if (range === "last") {
+    const end = addDays(t, 6 - t.getDay());           // Saturday of this week
+    return { start: addDays(end, -7*53 + 1), end, clipEnd: t };
+  }
+  const y = +range;
+  const s = new Date(y, 0, 1), e = new Date(y, 11, 31);
+  return { start: addDays(s, -s.getDay()), end: addDays(e, 6 - e.getDay()), clipStart: s, clipEnd: e < t ? e : t };
+}
+
+function radius(n, max) {
+  if (!n) return 0;
+  const lv = Math.min(3, Math.ceil(Math.log(n + 1) / Math.log(max + 1) * 3));
+  return [0, 7, 8.5, 10.5][lv];
+}
+
+function render() {
+  const { start, end, clipStart, clipEnd } = bounds();
+  const days = [];
+  for (let d = new Date(start); d <= end; d = addDays(d, 1)) days.push(new Date(d));
+  const inRange = d => (!clipStart || d >= clipStart) && d <= clipEnd;
+  const vals = days.filter(inRange).map(d => count(DATA.days[iso(d)]));
+  const max = Math.max(1, ...vals);
+
+  const cell = 27, left = 64, top = 64, weeks = Math.ceil(days.length / 7);
+  const W = left + weeks * cell + 10, H = top + 7 * cell + 4;
+  const svg = $("#grid");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  let out = "";
+  DOW.forEach((l, i) => out += `<text x="0" y="${top + i*cell + 7}">${l}</text>`);
+  let lastM = -1;
+  for (let w = 0; w < weeks; w++) {
+    const firstOfMonth = days.slice(w*7, w*7+7).find(d => d.getDate() === 1 && inRange(d));
+    const ref = firstOfMonth || (w === 0 ? days.find(inRange) : null);
+    if (ref && ref.getMonth() !== lastM && (firstOfMonth || ref.getDate() < 15)) {
+      lastM = ref.getMonth();
+      out += `<text x="${left + w*cell - 4}" y="${top - 32}">${MONTHS[lastM]}</text>`;
+    }
+  }
+  const tISO = iso(today());
+  days.forEach((d, i) => {
+    const w = Math.floor(i / 7), r = d.getDay();
+    const cx = left + w*cell + 8, cy = top + r*cell;
+    const k = iso(d);
+    if (!inRange(d)) {
+      if (k === tISO || d > today()) return;
+      return;
+    }
+    const n = count(DATA.days[k]);
+    const rad = radius(n, max);
+    if (k === tISO && !n) {
+      out += `<circle class="day" data-d="${k}" cx="${cx}" cy="${cy}" r="8" fill="none" stroke="var(--ink)" stroke-width="2"/>`;
+    } else if (n) {
+      out += `<circle class="day" data-d="${k}" cx="${cx}" cy="${cy}" r="${rad}" fill="${rad > 9 ? "var(--dot-strong)" : "var(--dot)"}"${k === tISO ? ' stroke="var(--ink)" stroke-width="2"' : ""}/>`;
+    } else {
+      out += `<circle class="day" data-d="${k}" cx="${cx}" cy="${cy}" r="8" fill="var(--empty)"/>`;
+    }
+  });
+  svg.innerHTML = out;
+  renderStats(days.filter(inRange));
+}
+
+function streaks(list) {
+  let best = 0, cur = 0;
+  for (const d of list) { cur = count(DATA.days[iso(d)]) ? cur + 1 : 0; best = Math.max(best, cur); }
+  // current streak counts back from today (or yesterday, if today has nothing yet)
+  let c = 0, d = today();
+  if (!count(DATA.days[iso(d)])) d = addDays(d, -1);
+  while (count(DATA.days[iso(d)])) { c++; d = addDays(d, -1); }
+  return { best, cur: c };
+}
+
+function renderStats(list) {
+  const active = list.filter(d => count(DATA.days[iso(d)])).length;
+  const { best, cur } = streaks(list);
+  const commits = list.reduce((s, d) => s + (DATA.days[iso(d)]?.commits || 0), 0);
+  const edits = list.reduce((s, d) => s + (DATA.days[iso(d)]?.edits || 0), 0);
+  const pct = list.length ? Math.round(active / list.length * 100) : 0;
+  const items = [
+    [active, `days with code (${pct}% of ${list.length})`],
+    [cur, "current streak"],
+    [best, "longest streak"],
+  ];
+  if (source !== "edits") items.push([commits, "commits"]);
+  if (source !== "commits") items.push([edits, "code edits in Claude Code"]);
+  $("#stats").innerHTML = items.map(([v, l]) => `<div class="stat"><b>${v.toLocaleString()}</b><span>${l}</span></div>`).join("");
+}
+
+function legend() {
+  $("#legend").innerHTML = [[8,"var(--empty)"],[7,"var(--dot)"],[8.5,"var(--dot)"],[10.5,"var(--dot-strong)"]]
+    .map(([r,f],i) => `<circle cx="${10 + i*25}" cy="9" r="${r*0.8}" fill="${f}"/>`).join("");
+}
+
+function ranges() {
+  const years = [...new Set(Object.keys(DATA.days).map(k => k.slice(0,4)))].sort().reverse();
+  const opts = [["last","Last 12 months"], ...years.map(y => [y, y])];
+  if (!opts.some(o => o[0] === range)) range = "last";
+  $("#range").innerHTML = opts.map(([v,l]) => `<button data-v="${v}" class="${v===range?"on":""}">${l}</button>`).join("");
+}
+
+function setData(d) {
+  DATA = d;
+  $("#gen").textContent = `Updated ${new Date(d.generated).toLocaleString()}`;
+  ranges(); render();
+}
+
+document.addEventListener("click", e => {
+  const b = e.target.closest(".seg button");
+  if (!b) return;
+  const seg = b.parentElement;
+  seg.querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+  if (seg.id === "source") source = b.dataset.v; else range = b.dataset.v;
+  render();
+});
+
+const tip = $("#tip");
+$("#grid").addEventListener("mousemove", e => {
+  const c = e.target.closest(".day");
+  if (!c) { tip.style.opacity = 0; return; }
+  const k = c.dataset.d, rec = DATA.days[k];
+  const date = new Date(k + "T00:00").toLocaleDateString(undefined, { weekday:"short", month:"short", day:"numeric", year:"numeric" });
+  let html = `<b>${date}</b><br>`;
+  if (!rec || !count(rec)) html += "No code";
+  else {
+    const parts = [];
+    if (source !== "edits" && rec.commits) parts.push(`${rec.commits} commit${rec.commits>1?"s":""}`);
+    if (source !== "commits" && rec.edits) parts.push(`${rec.edits} edit${rec.edits>1?"s":""}`);
+    html += parts.join(" · ");
+    if (rec.projects.length) html += `<br>${rec.projects.join(", ")}`;
+  }
+  tip.innerHTML = html; tip.style.opacity = 1;
+  const x = Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8);
+  tip.style.left = x + "px"; tip.style.top = (e.clientY + 14) + "px";
+});
+$("#grid").addEventListener("mouseleave", () => tip.style.opacity = 0);
+
+legend();
+fetch("/data.json").then(r => r.json()).then(setData);
+</script>
+</body>
+</html>
