@@ -33,6 +33,16 @@
   svg .day:hover { stroke:var(--ink); stroke-width:1.5; }
   .foot { color:var(--muted); font-size:12px; margin-top:20px; display:flex; justify-content:space-between; gap:16px; flex-wrap:wrap; }
   .legend { display:flex; align-items:center; gap:6px; }
+  #plan { margin-top:64px; }
+  #plan h2 { font-size:28px; font-weight:500; margin:0 0 6px; }
+  #plan .sub, #plan-note { color:var(--muted); font-size:14px; margin:0; }
+  #plan .stats { margin:24px 0 12px; }
+  #plan-note { margin:0 0 24px; }
+  #plan-grid { width:100%; height:auto; display:block; }
+  #plan-list { list-style:none; padding:0; margin:28px 0 0; display:grid; gap:8px; font-size:13px; }
+  #plan-list li { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+  #plan-list .wk { color:var(--muted); width:150px; }
+  #plan-list .dt { border:1px solid var(--rule); border-radius:999px; padding:2px 10px; }
   #tip { position:fixed; pointer-events:none; background:var(--ink); color:var(--bg); font-size:12px; line-height:1.45; padding:8px 10px; border-radius:6px; opacity:0; transition:opacity .08s; max-width:300px; z-index:9; }
   #tip b { font-weight:600; }
 </style>
@@ -60,6 +70,15 @@
     <span id="gen"></span>
     <span class="legend">Less <svg width="96" height="18" id="legend"></svg> More</span>
   </div>
+  <section id="plan" hidden>
+    <hr>
+    <h2>Plan from today</h2>
+    <p class="sub">The earliest days to be active so the grid spells this name.</p>
+    <div class="stats" id="plan-summary"></div>
+    <p id="plan-note"></p>
+    <div class="grid-wrap"><svg id="plan-grid"></svg></div>
+    <ul id="plan-list"></ul>
+  </section>
 </main>
 <div id="tip"></div>
 <script>
@@ -130,6 +149,7 @@ function drawName(name) {
   if (skipped.length) notes.push(`Can't draw: ${skipped.map(c => `"${c}"`).join(" ")}`);
   $("#name-note").textContent = notes.join(" ");
   setData({ generated: new Date().toISOString(), word: name, days });
+  renderPlan(name);
 }
 
 
@@ -280,8 +300,90 @@ $("#grid").addEventListener("mousemove", e => {
 $("#grid").addEventListener("mouseleave", () => tip.style.opacity = 0);
 
 legend();
+// ---- Plan from today: earliest dates to be active so the name appears ----
+const fmt = (d, o) => d.toLocaleDateString(undefined, o || { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+
+// Columns of the name: each column is the list of lit rows (0 = Sunday).
+function nameColumns(name) {
+  const cols = [];
+  [...name.trim()].filter(ch => FONT[ch]).forEach((ch, i) => {
+    const g = FONT[ch].split("|");
+    if (i) cols.push([]);                                   // 1-week gap between letters
+    for (let c = 0; c < g[0].length; c++) cols.push(g.map((l, r) => l[c] === "#" ? r : -1).filter(r => r >= 0));
+  });
+  return cols;
+}
+
+function planFromToday(name) {
+  const cols = nameColumns(name);
+  if (!cols.some(c => c.length)) return null;
+  const t = today(), thisSunday = addDays(t, -t.getDay());
+  // Start this week only if none of the first column's dots fall on a day that has already passed.
+  const fitsThisWeek = cols[0].every(r => r >= t.getDay());
+  const start = fitsThisWeek ? thisSunday : addDays(thisSunday, 7);
+  const dates = [];
+  cols.forEach((rows, w) => rows.forEach(r => dates.push(addDays(start, 7 * w + r))));
+  dates.sort((a, b) => a - b);
+  return { start, weeks: cols.length, dates, first: dates[0], last: dates[dates.length - 1] };
+}
+
+function renderPlan(name) {
+  const box = $("#plan");
+  const p = planFromToday(name);
+  if (!p) { box.hidden = true; return; }
+  box.hidden = false;
+  const span = Math.round((p.last - p.first) / 864e5) + 1;
+  $("#plan-summary").innerHTML =
+    `<div class="stat"><b>${fmt(p.first, { month: "short", day: "numeric" })}</b><span>first active day (${fmt(p.first, { weekday: "long" })})</span></div>` +
+    `<div class="stat"><b>${fmt(p.last, { month: "short", day: "numeric", year: "numeric" })}</b><span>name complete</span></div>` +
+    `<div class="stat"><b>${p.dates.length}</b><span>days to be active</span></div>` +
+    `<div class="stat"><b>${span}</b><span>days from first to last</span></div>`;
+  $("#plan-note").textContent =
+    (p.start > addDays(today(), -today().getDay()) ? "It can't start this week: some of the first column's days have already passed. " : "") +
+    "Be active on the lit days only. Leave every other day in this stretch empty, or extra dots will show up." +
+    (p.weeks > 52 ? ` This name needs ${p.weeks} weeks, so it won't fit in a one-year view.` : "");
+
+  // Forward grid: from the start week to the last week of the name.
+  const lit = new Set(p.dates.map(iso)), tISO = iso(today());
+  const cell = 27, left = 64, top = 64, weeks = p.weeks;
+  const W = Math.max(left + weeks * cell + 10, 400), H = top + 7 * cell + 4;
+  let out = "";
+  DOW.forEach((l, i) => out += `<text x="0" y="${top + i * cell + 7}">${l}</text>`);
+  let lastM = -1;
+  for (let w = 0; w < weeks; w++) {
+    const d0 = addDays(p.start, 7 * w), m = addDays(d0, 6).getMonth();
+    if (m !== lastM && (w === 0 || addDays(d0, 6).getDate() <= 7)) { lastM = m; out += `<text x="${left + w * cell - 4}" y="${top - 32}">${MONTHS[m]}</text>`; }
+    for (let r = 0; r < 7; r++) {
+      const d = addDays(d0, r), k = iso(d), cx = left + w * cell + 8, cy = top + r * cell;
+      if (d < today()) continue;                              // already passed
+      const on = lit.has(k);
+      out += `<circle class="day" data-d="${k}" data-on="${on ? 1 : 0}" cx="${cx}" cy="${cy}" r="${on ? 10.5 : 8}" fill="${on ? "var(--dot-strong)" : "var(--empty)"}"${k === tISO ? ' stroke="var(--ink)" stroke-width="2"' : ""}/>`;
+    }
+  }
+  const svg = $("#plan-grid");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.style.maxWidth = W + "px";
+  svg.innerHTML = out;
+
+  // Week-by-week list of dates.
+  const byWeek = new Map();
+  p.dates.forEach(d => { const k = iso(addDays(d, -d.getDay())); (byWeek.get(k) || byWeek.set(k, []).get(k)).push(d); });
+  $("#plan-list").innerHTML = [...byWeek].map(([k, ds]) =>
+    `<li><span class="wk">Week of ${fmt(new Date(k + "T00:00"), { month: "short", day: "numeric", year: "numeric" })}</span>` +
+    ds.map(d => `<span class="dt">${fmt(d, { weekday: "short", month: "short", day: "numeric" })}</span>`).join("") + `</li>`).join("");
+}
+
+$("#plan-grid").addEventListener("mousemove", e => {
+  const c = e.target.closest(".day");
+  if (!c) { tip.style.opacity = 0; return; }
+  tip.innerHTML = `<b>${fmt(new Date(c.dataset.d + "T00:00"))}</b><br>${c.dataset.on === "1" ? "Be active" : "Leave empty"}`;
+  tip.style.opacity = 1;
+  tip.style.left = Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8) + "px"; tip.style.top = (e.clientY + 14) + "px";
+});
+$("#plan-grid").addEventListener("mouseleave", () => tip.style.opacity = 0);
+
 $("#name").addEventListener("input", e => drawName(e.target.value));
-fetch("/data.json").then(r => r.json()).then(d => { $("#name").value = d.word || ""; setData(d); });
+fetch("/data.json").then(r => r.json()).then(d => { $("#name").value = d.word || ""; setData(d); renderPlan(d.word || ""); });
 </script>
 </body>
 </html>
