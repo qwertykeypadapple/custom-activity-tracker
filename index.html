@@ -19,8 +19,10 @@
   .seg { display:flex; border:1px solid var(--rule); border-radius:999px; overflow:hidden; }
   .seg button { background:none; border:0; color:var(--muted); font:inherit; font-size:13px; padding:6px 14px; cursor:pointer; }
   .seg button.on { background:var(--ink); color:var(--bg); }
-  .refresh { background:none; border:1px solid var(--rule); border-radius:999px; color:var(--ink); font:inherit; font-size:13px; padding:6px 14px; cursor:pointer; }
-  .refresh:disabled { opacity:.5; cursor:wait; }
+  .name-row { margin:24px 0 0; display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+  #name { font:inherit; font-size:18px; padding:9px 14px; border:1px solid var(--rule); border-radius:8px; background:var(--bg); color:var(--ink); width:min(360px,100%); }
+  #name:focus { outline:none; border-color:var(--ink); }
+  #name-note { color:var(--muted); font-size:13px; }
   .stats { display:flex; gap:48px; margin:28px 0 36px; flex-wrap:wrap; }
   .stat b { display:block; font-size:34px; font-weight:500; font-variant-numeric:tabular-nums; }
   .stat span { color:var(--muted); font-size:13px; }
@@ -48,6 +50,10 @@
       <div class="seg" id="range"></div>
     </div>
   </div>
+  <div class="name-row">
+    <input id="name" type="text" placeholder="Type a name" autocomplete="off" spellcheck="false" aria-label="Name to write on the grid">
+    <span id="name-note"></span>
+  </div>
   <div class="stats" id="stats"></div>
   <div class="grid-wrap"><svg id="grid"></svg></div>
   <div class="foot">
@@ -61,6 +67,71 @@ const $ = s => document.querySelector(s);
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const DOW = ["S","M","T","W","T","F","S"];
 let DATA = null, source = "all", range = "last";
+
+// 7-row pixel font (row 0 = Sunday). "#" = lit dot.
+const FONT = {
+  A:".###.|#...#|#...#|#####|#...#|#...#|#...#", B:"####.|#...#|#...#|####.|#...#|#...#|####.",
+  C:".###.|#...#|#....|#....|#....|#...#|.###.", D:"####.|#...#|#...#|#...#|#...#|#...#|####.",
+  E:"#####|#....|#....|####.|#....|#....|#####", F:"#####|#....|#....|####.|#....|#....|#....",
+  G:".###.|#...#|#....|#.###|#...#|#...#|.####", H:"#...#|#...#|#...#|#####|#...#|#...#|#...#",
+  I:"###|.#.|.#.|.#.|.#.|.#.|###",             J:"..###|...#.|...#.|...#.|...#.|#..#.|.##..",
+  K:"#...#|#..#.|#.#..|##...|#.#..|#..#.|#...#", L:"#....|#....|#....|#....|#....|#....|#####",
+  M:"#...#|##.##|#.#.#|#.#.#|#...#|#...#|#...#", N:"#...#|##..#|##..#|#.#.#|#..##|#..##|#...#",
+  O:".###.|#...#|#...#|#...#|#...#|#...#|.###.", P:"####.|#...#|#...#|####.|#....|#....|#....",
+  Q:".###.|#...#|#...#|#...#|#.#.#|#..#.|.##.#", R:"####.|#...#|#...#|####.|#.#..|#..#.|#...#",
+  S:".####|#....|#....|.###.|....#|....#|####.", T:"#####|..#..|..#..|..#..|..#..|..#..|..#..",
+  U:"#...#|#...#|#...#|#...#|#...#|#...#|.###.", V:"#...#|#...#|#...#|#...#|#...#|.#.#.|..#..",
+  W:"#...#|#...#|#...#|#.#.#|#.#.#|#.#.#|.#.#.", X:"#...#|#...#|.#.#.|..#..|.#.#.|#...#|#...#",
+  Y:"#...#|#...#|.#.#.|..#..|..#..|..#..|..#..", Z:"#####|....#|...#.|..#..|.#...|#....|#####",
+  a:".....|.....|.###.|....#|.####|#...#|.####", b:"#....|#....|#.##.|##..#|#...#|#...#|####.",
+  c:".....|.....|.###.|#....|#....|#...#|.###.", d:"....#|....#|.##.#|#..##|#...#|#...#|.####",
+  e:".....|.....|.###.|#...#|#####|#....|.###.", f:"..##.|.#..#|.#...|###..|.#...|.#...|.#...",
+  g:".....|.####|#...#|#...#|.####|....#|.###.", h:"#....|#....|#.##.|##..#|#...#|#...#|#...#",
+  i:".#.|...|##.|.#.|.#.|.#.|###",             j:"...#|....|..##|...#|...#|#..#|.##.",
+  k:"#...|#...|#..#|#.#.|##..|#.#.|#..#",       l:"##.|.#.|.#.|.#.|.#.|.#.|###",
+  m:".....|.....|##.#.|#.#.#|#.#.#|#...#|#...#", n:".....|.....|#.##.|##..#|#...#|#...#|#...#",
+  o:".....|.....|.###.|#...#|#...#|#...#|.###.", p:".....|####.|#...#|#...#|####.|#....|#....",
+  q:".....|.####|#...#|#...#|.####|....#|....#", r:".....|.....|#.##.|##..#|#....|#....|#....",
+  s:".....|.....|.####|#....|.###.|....#|####.", t:".#..|.#..|###.|.#..|.#..|.#.#|..#.",
+  u:".....|.....|#...#|#...#|#...#|#..##|.##.#", v:".....|.....|#...#|#...#|#...#|.#.#.|..#..",
+  w:".....|.....|#...#|#...#|#.#.#|#.#.#|.#.#.", x:".....|.....|#...#|.#.#.|..#..|.#.#.|#...#",
+  y:".....|#...#|#...#|#...#|.####|....#|.###.", z:".....|.....|#####|...#.|..#..|.#...|#####",
+  0:".###.|#...#|#..##|#.#.#|##..#|#...#|.###.", 1:".#.|##.|.#.|.#.|.#.|.#.|###",
+  2:".###.|#...#|....#|...#.|..#..|.#...|#####", 3:"####.|....#|....#|.###.|....#|....#|####.",
+  4:"...#.|..##.|.#.#.|#..#.|#####|...#.|...#.", 5:"#####|#....|####.|....#|....#|#...#|.###.",
+  6:".###.|#....|#....|####.|#...#|#...#|.###.", 7:"#####|....#|...#.|..#..|.#...|.#...|.#...",
+  8:".###.|#...#|#...#|.###.|#...#|#...#|.###.", 9:".###.|#...#|#...#|.####|....#|....#|.###.",
+  " ":"...|...|...|...|...|...|...",
+};
+const WEEKS = 53, FULL = 52;   // the last week is partly in the future
+
+// Turn a name into {days, cols, skipped}: lit dates centered in the last-12-months grid.
+function nameToDays(name) {
+  const glyphs = [], skipped = new Set();
+  for (const ch of name) FONT[ch] ? glyphs.push(FONT[ch].split("|")) : skipped.add(ch);
+  const cols = glyphs.reduce((s, g) => s + g[0].length, 0) + Math.max(0, glyphs.length - 1);
+  const t = today(), end = addDays(t, 6 - t.getDay()), start = addDays(end, -7 * WEEKS + 1);
+  let x = Math.floor((FULL - cols) / 2); if (x < 0) x = 0;
+  const days = {};
+  for (const g of glyphs) {
+    g.forEach((line, row) => [...line].forEach((px, col) => {
+      const w = x + col;
+      if (px === "#" && w < FULL) days[iso(addDays(start, 7 * w + row))] = { commits: 1, edits: 0, projects: [] };
+    }));
+    x += g[0].length + 1;
+  }
+  return { days, cols, skipped: [...skipped] };
+}
+
+function drawName(name) {
+  const { days, cols, skipped } = nameToDays(name);
+  const notes = [];
+  if (cols > FULL) notes.push(`Too long: needs ${cols} weeks, the grid has ${FULL}. The end is cut off.`);
+  if (skipped.length) notes.push(`Can't draw: ${skipped.map(c => `"${c}"`).join(" ")}`);
+  $("#name-note").textContent = notes.join(" ");
+  setData({ generated: new Date().toISOString(), word: name, days });
+}
+
 
 const iso = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate()+n); return x; };
@@ -209,7 +280,8 @@ $("#grid").addEventListener("mousemove", e => {
 $("#grid").addEventListener("mouseleave", () => tip.style.opacity = 0);
 
 legend();
-fetch("/data.json").then(r => r.json()).then(setData);
+$("#name").addEventListener("input", e => drawName(e.target.value));
+fetch("/data.json").then(r => r.json()).then(d => { $("#name").value = d.word || ""; setData(d); });
 </script>
 </body>
 </html>
